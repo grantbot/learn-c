@@ -9,22 +9,16 @@
 #define NUM_THREADS 2
 #define BUFFER_SIZE 10
 
-// Simulate a bounded buffer
-int queue[10];
-
-// Initialize 10 resources to put to, 0 to get from
-int production_semaphore = BUFFER_SIZE;
-int consumption_semaphore = 0;
-
-// Create pointers to our semaphores
-int *prod_sema_ptr = &production_semaphore;
-int *cons_sema_ptr = &consumption_semaphore;
+struct CircBuffer {
+  int queue[BUFFER_SIZE];
+  int production_semaphore;
+  int consumption_semaphore;
+};
 
 
 /**
- * Block while waiting for a resource to become available.
- * @param (sema_ptr) Pointer to an integer (mimicking a semaphore val).
- * @return Nothing, just unblocks.
+ * Decrement a resource, then block while waiting for it to become available.
+ * @param (sema_ptr) Pointer to an integer condition var.
  */
 void sem_wait(int *sema_ptr)
 {
@@ -39,66 +33,80 @@ void sem_wait(int *sema_ptr)
 
 /**
  * Increment a semaphore by 1, to signal the addition of a resource.
- * @param (sema_ptr) Pointer to an integer (mimicking a semaphore val).
+ * @param (sema_ptr) Pointer to an integer condition var.
  */
 void sem_post(int *sema_ptr)
 {
   (*sema_ptr)++;
 }
 
+
 /**
- * Writes random chars to a bounded buffer, waiting politely for opportunities.
+ * Writes random chars to a bounded buffer, waiting politely for enough space.
  */
-void *producer(void *threadid)
+void *producer(void *circ_buffer)
 {
+  struct CircBuffer *buffer;
   int cur_index = 0;
   char cur_char;
+
+  buffer = (struct CircBuffer *)circ_buffer;
+
   while (1)  {
-    sem_wait(prod_sema_ptr);
-    cur_char = 65 + (cur_index % 52);
-    queue[cur_index % 10] = cur_char;
+    sem_wait(&buffer->production_semaphore);
+    cur_char = 65 + (cur_index % 52);  // A-Z, then a-z, plus a few extra
+    buffer->queue[cur_index % 10] = cur_char;
     printf("PROD %c\n", cur_char);
     cur_index++;
-    sem_post(cons_sema_ptr);
+    sem_post(&buffer->consumption_semaphore);
     usleep((random() % 100) * 10000);
   }
 }
 
 /**
- * Consumes from a bounded buffer in order, waiting politely for opportunities.
+ * Consumes from a bounded buffer, waiting politely for new items.
  */
-void *consumer(void *threadid)
+void *consumer(void *circ_buffer)
 {
+  struct CircBuffer *buffer;
   int cur_index = 0;
   int cur_char;
+
+  buffer = (struct CircBuffer *)circ_buffer;
+
   while (1)  {
-    sem_wait(cons_sema_ptr);
-    cur_char = queue[cur_index % 10];
+    sem_wait(&buffer->consumption_semaphore);
+    cur_char = buffer->queue[cur_index % 10];
     printf("       CONS %c\n", cur_char);
     cur_index++;
-    sem_post(prod_sema_ptr);
+    sem_post(&buffer->production_semaphore);
     usleep((random() % 100) * 10000);
   }
 }
 
 int main(void)
 {
-  // Kick off consumer and producer, passing to each of them the simulated
-  // bounded buffer and pointers to each semaphore.
-  int cons;
-  int prod;
+  // Allocate a circular buffer on main thread's stack
+  struct CircBuffer circ_buffer;
+  circ_buffer.production_semaphore = BUFFER_SIZE;
+  circ_buffer.consumption_semaphore = 0;
 
+
+  // Kick off consumer and producer, passing them a pointer to our circular buffer
+  int cons_thread;
+  int prod_thread;
   pthread_t threads[NUM_THREADS];
-  cons = pthread_create(&threads[0], NULL, consumer, NULL);
-  prod = pthread_create(&threads[1], NULL, producer, NULL);
 
-  if (cons) {
-    printf("ERROR in cons: %d\n", cons);
+  cons_thread = pthread_create(&threads[0], NULL, consumer, (void *)&circ_buffer);
+  prod_thread = pthread_create(&threads[1], NULL, producer, (void *)&circ_buffer);
+
+  if (cons_thread) {
+    printf("ERROR in cons_thread: %d\n", cons_thread);
     fprintf(stderr, "Error: %s\n", strerror(errno));
     exit(-1);
   }
-  if (prod) {
-    printf("ERROR in prod: %d\n", prod);
+  if (prod_thread) {
+    printf("ERROR in prod_thread: %d\n", prod_thread);
     fprintf(stderr, "Error: %s\n", strerror(errno));
     exit(-1);
   }
